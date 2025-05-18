@@ -19,6 +19,7 @@ from diffilqrax.typs import (
     ParallelSystem,
 )
 from diffilqrax.utils import time_map
+from src.arm_model import update_state
 
 # from chex import assert_scalar_negative, assert_scalar_positive
 
@@ -77,7 +78,7 @@ def compute_lqr_params(
     theta = params.theta
     tps = jnp.arange(model.dims.horizon)
 
-    (Fx, Fu) = time_map(model.lin_dyn)(tps, Xs[:-1], Us, theta)
+    (Fx, Fu) = time_map(model.lin_dyn)(tps, Xs[:-1], Us, theta) 
     (Cx, Cu) = time_map(model.lin_cost)(tps, Xs[:-1], Us, theta)
     (Cxx, Cxu), (_, Cuu) = time_map(model.quad_cost)(tps, Xs[:-1], Us, theta)
     fCx = jax.jacrev(model.costf)(Xs[-1], theta)
@@ -85,7 +86,7 @@ def compute_lqr_params(
 
     def _get_diff_dyn(t, x, u, theta):
         (Fx, Fu) = model.lin_dyn(t, x, u, theta)
-        return model.dynamics(t, x, u, theta) - Fx @ x - Fu @ u
+        return model.dynamics(t, x, u, theta) - (Fx @ x) - (Fu @ u)
 
     def _compute_f_with_offset(tps, Xs, Us, theta):
         return jax.vmap(_get_diff_dyn, in_axes=(0, 0, 0, None))(tps, Xs[:-1], Us, theta)
@@ -249,7 +250,10 @@ def ilqr_simulate(
     def fwd_step(state, inputs):
         t, u = inputs
         x, nx_cost = state
+
         nx = model.dynamics(t, x, u, theta)
+        torq = theta.C @ jax.nn.relu(x[:-4])
+        nx = nx.at[-4:].set(update_state(x, torq))
         nx_cost = nx_cost + model.cost(t, x, u, theta)
         return (nx, nx_cost), (nx, u)
 
@@ -302,7 +306,10 @@ def ilqr_forward_pass(
         delta_x = x_hat - x
         delta_u = K @ delta_x + alpha * k
         u_hat = u + delta_u
+        
         nx_hat = model.dynamics(t, x_hat, u_hat, theta)
+        torq = theta.C @ jax.nn.relu(x_hat[:-4])
+        nx_hat = nx_hat.at[-4:].set(update_state(x_hat, torq))
         nx_cost = nx_cost + model.cost(t, x_hat, u_hat, theta)
         return (nx_hat, nx_cost), (nx_hat, u_hat)
 
@@ -361,6 +368,7 @@ def ilqr_solver(
     """
     # simulate initial cost
     (Xs_init, _), c_init = ilqr_simulate(model, Us_init, params)
+    
     # define initial carry tuple: (Xs, Us, Total cost (old), iteration, cond)
     initial_carry = (Xs_init, Us_init, c_init, 0, True)
 
@@ -376,7 +384,7 @@ def ilqr_solver(
         lqr_params = approx_lqr(model, old_Xs, old_Us, params)
         # calc gains and expected dold_cost
         exp_cost_red, gains = lqr.lqr_backward_pass(lqr_params)
-
+        
         # rollout with non-linear dynamics, α=1. (dJ, Ks), calc_expected_change(dJ=dJ)
         # wrap linesearch with rollout
         def linesearch_wrapped(*args):
