@@ -251,9 +251,13 @@ def ilqr_simulate(
         t, u = inputs
         x, nx_cost = state
 
+        # Update neural state
         nx = model.dynamics(t, x, u, theta)
+        # Calculate torques from current neural state
         torq = theta.C @ jax.nn.relu(x[:-4])
+        # Update arm state after applied torques
         nx = nx.at[-4:].set(update_state(x, torq))
+        # Calculate cost
         nx_cost = nx_cost + model.cost(t, x, u, theta)
         return (nx, nx_cost), (nx, u)
 
@@ -307,9 +311,13 @@ def ilqr_forward_pass(
         delta_u = K @ delta_x + alpha * k
         u_hat = u + delta_u
         
+        # Update neural state
         nx_hat = model.dynamics(t, x_hat, u_hat, theta)
+        # Calculate torques from current neural state estimate
         torq = theta.C @ jax.nn.relu(x_hat[:-4])
+        # Update arm state after applied torques
         nx_hat = nx_hat.at[-4:].set(update_state(x_hat, torq))
+        # Calculate cost
         nx_cost = nx_cost + model.cost(t, x_hat, u_hat, theta)
         return (nx_hat, nx_cost), (nx_hat, u_hat)
 
